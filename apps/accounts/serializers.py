@@ -1,10 +1,13 @@
+from os import write
 from django.conf import settings
 from rest_framework import serializers
 from django.contrib.auth import authenticate
 from django.contrib.auth import get_user_model
 from google.auth.transport import requests
 from google.oauth2 import id_token
+import logging
 
+logger = logging.getLogger(__name__)
 
 User=get_user_model()
 
@@ -18,10 +21,12 @@ class LoginSerializer(serializers.Serializer):
 
         try:
             user=User.objects.get(email=email)
-            print(user)
+            logger.info(f"Login attempt initiated for user: {email}")
         except User.DoesNotExist:
+            logger.warning(f"Login attempt failed: User with email {email} does not exist.")
             raise serializers.ValidationError({"error":"Invalid Credentials"})
         if not user.check_password(password):
+            logger.warning(f"Login attempt failed: Incorrect password for user {email}.")
             raise serializers.ValidationError({"error":"Invalid Credentials"})
         
         data["user"]=user
@@ -69,10 +74,10 @@ class GoogleLoginSerializer(serializers.Serializer):
                 requests.Request(),
                 settings.GOOGLE_CLIENT_ID,
             )
-            print(google_user)
+            logger.info(f"Google login verified token for email: {google_user.get('email')}")
 
         except Exception as e:
-            print(e)
+            logger.error(f"Google login failed to verify OAuth token: {str(e)}", exc_info=True)
             raise serializers.ValidationError({
                 "error":"Invalid Google token"
             })
@@ -88,6 +93,10 @@ class GoogleLoginSerializer(serializers.Serializer):
                 "is_email_verified":True,
             }
         )
+        if created:
+            logger.info(f"Google Login: Created a new user account for {email}")
+        else:
+            logger.info(f"Google Login: Retrieved existing user account for {email}")
 
         data["user"]=user
         return data
@@ -149,3 +158,24 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
         instance.save()
 
         return instance
+
+
+class ForgotPasswordSerializer(serializers.Serializer):
+    email=serializers.EmailField(required=True)
+
+    def validate_email(self,value):
+        if not User.objects.filter(email__iexact=value).exists():
+            raise serializers.ValidationError("Invalid Email,please try with valid email")
+        return value
+
+class ResetPasswordSerializer(serializers.Serializer):
+    uid=serializers.CharField(required=True)
+    token=serializers.CharField(required=True)
+    password=serializers.CharField(required=True,write_only=True)
+    confirm_password=serializers.CharField(required=True,write_only=True)
+
+    def validate(self,attrs):
+        if attrs["password"]!=attrs["confirm_password"]:
+            raise serializers.ValidationError({"password":"Passwords must match"})
+        return attrs
+    
